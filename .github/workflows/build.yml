@@ -29,6 +29,17 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
+      - name: Apply Customizations (Fonts, Defaults)
+        run: |
+          # 1. Prepend Noto Kufi Arabic and Rubik to font families
+          sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/article/article.css
+          
+          # 2. Default View: Change Cards to List
+          sed -i 's/ViewType.Cards/ViewType.List/g' src/main/settings.ts
+          
+          # 3. Default Open Mode: Change Local to FullContent
+          sed -i 's/this.openTarget = SourceOpenTarget.Local/this.openTarget = SourceOpenTarget.FullContent/' src/scripts/models/source.ts
+        
       - name: Build React/TypeScript Code
         run: npm run build
 
