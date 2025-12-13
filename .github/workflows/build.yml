@@ -37,33 +37,35 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install
+          # Install the wrapper library
           npm install @mintplex-labs/piper-tts-web
+          # Install the actual WASM binaries (The "Better Way")
+          npm install @diffusionstudio/piper-wasm
 
-      # --- FIX 1: Bundle WASM Files (Download missing binaries) ---
+      # --- FIX 1: Bundle WASM Files (Clean Copy, No Downloads) ---
       - name: Bundle WASM Files
         run: |
           echo "Creating wasm-files directory..."
           mkdir -p wasm-files/onnx
           mkdir -p wasm-files/piper
           
-          echo "Copying ONNX Runtime files (from node_modules)..."
+          echo "Copying ONNX Runtime files..."
+          # We use find to be safe, but they are standard in node_modules
           find node_modules -name "ort-wasm-simd-threaded.wasm" -exec cp {} wasm-files/onnx/ \;
           find node_modules -name "ort-wasm-simd-threaded.mjs" -exec cp {} wasm-files/onnx/ \;
           
-          echo "Downloading Piper Phonemize files (from CDN)..."
-          # We use specific versions to ensure stability
-          BASE_URL="https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build"
-          
-          wget -q -O wasm-files/piper/piper_phonemize.wasm "$BASE_URL/piper_phonemize.wasm"
-          wget -q -O wasm-files/piper/piper_phonemize.data "$BASE_URL/piper_phonemize.data"
-          wget -q -O wasm-files/piper/piper_phonemize.js   "$BASE_URL/piper_phonemize.js"
-          wget -q -O wasm-files/piper/piper_worker.js      "$BASE_URL/worker/piper_worker.js"
+          echo "Copying Piper Phonemize files (from diffusionstudio package)..."
+          # Direct copy from the installed package. Much cleaner!
+          cp node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.wasm wasm-files/piper/
+          cp node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.data wasm-files/piper/
+          cp node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.js   wasm-files/piper/
+          cp node_modules/@diffusionstudio/piper-wasm/build/worker/piper_worker.js      wasm-files/piper/
           
           echo "Verifying WASM bundle..."
           ls -R wasm-files/
           
           if [ ! -s wasm-files/piper/piper_phonemize.wasm ]; then
-             echo "Error: Piper WASM file download failed!"
+             echo "Error: Piper WASM file missing!"
              exit 1
           fi
 
@@ -83,10 +85,8 @@ jobs:
       # --- FIX 3: Patch Electron Main Process ---
       - name: Patch Main Process
         run: |
-          # Import the helper at the top
           sed -i '1s/^/import { setupWasmPathIPC } from ".\/utils\/wasm-paths";\n/' src/electron.ts
           
-          # Initialize IPC at the end of the file
           cat <<'EOF' >> src/electron.ts
 
           import { ipcMain } from "electron";
@@ -118,7 +118,7 @@ jobs:
           pkg.build.files = pkg.build.files || ['dist/**/*', 'node_modules/**/*', 'package.json'];
           pkg.build.files.push('wasm-files/**/*');
           
-          // 2. Unpack WASM files so they are real files on disk (crucial for loading)
+          // 2. Unpack WASM files so they are real files on disk
           pkg.build.asarUnpack = pkg.build.asarUnpack || [];
           pkg.build.asarUnpack.push('wasm-files/**/*');
           
