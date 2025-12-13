@@ -37,14 +37,11 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install
-          # 1. Install Piper TTS Wrapper
           npm install @mintplex-labs/piper-tts-web
-          # 2. Install Piper WASM Binaries
           npm install @diffusionstudio/piper-wasm
-          # 3. Install ONNX Runtime
           npm install onnxruntime-web
-          # 4. Install Webpack Copy Plugin
           npm install --save-dev copy-webpack-plugin
+          npm install --save-dev js-yaml
 
       - name: Fix Piper TTS Package Exports
         run: |
@@ -68,8 +65,9 @@ jobs:
           # 1. Overwrite article.tsx
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Copy Webpack Patch Script
+          # 2. Copy Patch Scripts
           cp -f my-patches/patch-webpack.js .
+          cp -f my-patches/patch-electron-builder.js .
 
           # Clean up patches folder
           rm -rf my-patches
@@ -79,7 +77,14 @@ jobs:
           echo "Injecting WASM copy plugin into webpack config..."
           node patch-webpack.js
 
-      - name: Apply Preferences (Fonts, etc)
+      # --- CRITICAL STEP: Run the ASAR disabling script ---
+      - name: Patch Electron Builder Config (Disable ASAR)
+        run: |
+          echo "Disabling ASAR compression..."
+          node patch-electron-builder.js
+      # ----------------------------------------------------
+
+      - name: Apply Preferences
         run: |
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' src/scripts/settings.ts
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/styles/global.css
@@ -92,10 +97,8 @@ jobs:
           rm -rf node_modules/.cache/webpack
           npm run build
 
-      # --- CRITICAL FIX: Force ASAR off via CLI flags ---
       - name: Package Linux AppImage
-        run: npm run package-linux -- -c.asar=false
-      # --------------------------------------------------
+        run: npm run package-linux
 
       - name: Get Version
         id: version
