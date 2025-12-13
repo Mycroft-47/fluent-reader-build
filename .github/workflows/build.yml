@@ -43,6 +43,8 @@ jobs:
           npm install @diffusionstudio/piper-wasm
           # 3. Install Webpack Copy Plugin (To move WASM to dist/)
           npm install --save-dev copy-webpack-plugin
+          # 4. Install JS-YAML (Required for the electron-builder patch script)
+          npm install --save-dev js-yaml
 
       # --- Fix Piper Package Exports (Standard Fix) ---
       - name: Fix Piper TTS Package Exports
@@ -68,8 +70,9 @@ jobs:
           # 1. Overwrite article.tsx
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Copy the Webpack Patch Script to root
+          # 2. Copy the Patch Scripts to root
           cp -f my-patches/patch-webpack.js .
+          cp -f my-patches/patch-electron-builder.js .
 
           # Clean up patches folder
           rm -rf my-patches
@@ -79,6 +82,12 @@ jobs:
         run: |
           echo "Injecting WASM copy plugin into webpack config..."
           node patch-webpack.js
+
+      # --- Fix ASAR/WASM Loading (NEW STEP) ---
+      - name: Patch Electron Builder Config
+        run: |
+          echo "Configuring ASAR unpack for WASM files..."
+          node patch-electron-builder.js
 
       - name: Apply Preferences (Fonts, etc)
         run: |
