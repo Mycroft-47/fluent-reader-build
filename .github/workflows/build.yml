@@ -37,12 +37,14 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install
-          # Install Piper TTS
+          # 1. Install Piper TTS Wrapper
           npm install @mintplex-labs/piper-tts-web
-          # Install Webpack Copy Plugin (Standard solution for WASM assets)
+          # 2. Install Piper WASM Binaries (Vital: Contains the actual .wasm/.data files)
+          npm install @diffusionstudio/piper-wasm
+          # 3. Install Webpack Copy Plugin (To move WASM to dist/)
           npm install --save-dev copy-webpack-plugin
 
-      # --- Fix Package Exports ---
+      # --- Fix Piper Package Exports (Standard Fix) ---
       - name: Fix Piper TTS Package Exports
         run: |
           node -e "
