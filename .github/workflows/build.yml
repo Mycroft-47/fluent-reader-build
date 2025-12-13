@@ -41,14 +41,13 @@ jobs:
           npm install @mintplex-labs/piper-tts-web
           # 2. Install Piper WASM Binaries
           npm install @diffusionstudio/piper-wasm
-          # 3. Install ONNX Runtime (NEW: Required to force global config)
+          # 3. Install ONNX Runtime
           npm install onnxruntime-web
           # 4. Install Webpack Copy Plugin
           npm install --save-dev copy-webpack-plugin
           # 5. Install JS-YAML
           npm install --save-dev js-yaml
 
-      # --- Fix Piper Package Exports (Standard Fix) ---
       - name: Fix Piper TTS Package Exports
         run: |
           node -e "
@@ -66,32 +65,26 @@ jobs:
           }
           "
 
-      # --- Inject Files & Patches ---
       - name: Apply Custom Files
         run: |
-          # 1. Overwrite article.tsx
+          # 1. Overwrite article.tsx (Simplified paths)
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Overwrite preload.ts (NEW)
-          cp -f my-patches/preload.ts src/preload.ts
-      
-          # 3. Copy the Patch Scripts to root
+          # 2. Copy Patch Scripts
           cp -f my-patches/patch-webpack.js .
           cp -f my-patches/patch-electron-builder.js .
-      
+
           # Clean up patches folder
           rm -rf my-patches
 
-      # --- Standardize Webpack Config ---
       - name: Patch Webpack Config
         run: |
           echo "Injecting WASM copy plugin into webpack config..."
           node patch-webpack.js
 
-      # --- Fix ASAR/WASM Loading ---
-      - name: Patch Electron Builder Config
+      - name: Patch Electron Builder Config (Disable ASAR)
         run: |
-          echo "Configuring ASAR unpack for WASM files..."
+          echo "Disabling ASAR compression..."
           node patch-electron-builder.js
 
       - name: Apply Preferences (Fonts, etc)
