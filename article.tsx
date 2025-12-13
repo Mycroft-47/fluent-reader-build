@@ -21,18 +21,8 @@ import {
 import { shareSubmenu } from "./context-menu"
 import { platformCtrl, decodeFetchResponse } from "../scripts/utils"
 
-// --- Global Type Definition for WASM Paths ---
-declare global {
-    interface Window {
-        wasmPaths: {
-            get: () => Promise<{
-                onnxWasm: string;
-                piperData: string;
-                piperWasm: string;
-            }>;
-        };
-    }
-}
+// Import TtsSession directly for advanced configuration
+import { TtsSession } from "@mintplex-labs/piper-tts-web"
 
 const FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
 
@@ -67,11 +57,7 @@ type ArticleState = {
     isReading: boolean
     isLoadingTTS: boolean
     ttsDownloadProgress: number
-    ttsSession: any | null
 }
-
-// Global Singleton to keep the engine alive across articles
-let globalTtsSession: any = null;
 
 class Article extends React.Component<ArticleProps, ArticleState> {
     webviewRef = React.createRef<Electron.WebviewTag>()
@@ -81,6 +67,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
     audioPlayer: HTMLAudioElement | null = null
     currentBlobUrl: string | null = null
     activeRequestId: number = 0
+    ttsSession: TtsSession | null = null
 
     constructor(props: ArticleProps) {
         super(props)
@@ -96,7 +83,6 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             isReading: false,
             isLoadingTTS: false,
             ttsDownloadProgress: 0,
-            ttsSession: null
         }
         window.utils.addWebviewContextListener(this.contextMenuHandler)
         window.utils.addWebviewKeydownListener(this.keyDownHandler)
@@ -325,38 +311,6 @@ class Article extends React.Component<ArticleProps, ArticleState> {
         }
     }
 
-    // Initialize session with Local Paths to avoid CDN blocking
-    initTTSSession = async () => {
-        if (globalTtsSession) return globalTtsSession;
-        
-        try {
-            // Dynamic import
-            const tts = await import("@mintplex-labs/piper-tts-web");
-            
-            // Get local paths from Main Process (via preload)
-            // This is the key fix for the "Failed to fetch" error
-            const wasmPaths = await window.wasmPaths.get();
-            
-            console.log('[TTS] Initializing with local paths:', wasmPaths);
-            
-            const session = await tts.TtsSession.create({
-                voiceId: 'en_US-lessac-medium',
-                wasmPaths: {
-                    onnxWasm: wasmPaths.onnxWasm,
-                    piperData: `file://${wasmPaths.piperData}`, // Must use file:// protocol
-                    piperWasm: `file://${wasmPaths.piperWasm}`,
-                },
-                logger: (msg: string) => console.log('[TTS]', msg)
-            });
-            
-            globalTtsSession = session;
-            return session;
-        } catch (e) {
-            console.error("[TTS] Init Error:", e);
-            throw e;
-        }
-    }
-
     handleReadAloud = async () => {
         if (this.state.isReading || this.state.isLoadingTTS) {
             this.stopTTS()
@@ -389,7 +343,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             if (content.length > 10000) {
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `Article is too long (${content.length} chars, max 10,000).`,
+                    `Article is too long for TTS (${content.length.toLocaleString()} characters, max 10,000).`,
                     intl.get("confirm"),
                     "",
                     false,
@@ -400,17 +354,33 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             this.setState({ isLoadingTTS: true, ttsDownloadProgress: 0 })
             
-            // 1. Initialize (Downloads model on first run, uses local WASM)
-            const session = await this.initTTSSession();
+            // 1. Initialize Session with LOCAL WASM PATHS
+            if (!this.ttsSession) {
+                this.ttsSession = new TtsSession({
+                    voiceId: 'en_US-lessac-medium',
+                    wasmPaths: {
+                        // We configured webpack to copy WASM to dist/wasm/
+                        // Since article.html runs in dist/article/, we go up one level.
+                        onnxWasm: '../wasm/', 
+                        piperWasm: '../wasm/piper_phonemize.wasm',
+                        piperData: '../wasm/piper_phonemize.data',
+                    },
+                    progress: (progress) => {
+                        if (currentRequestId === this.activeRequestId && progress.total > 0) {
+                            const percent = (progress.loaded / progress.total) * 100
+                            this.setState({ ttsDownloadProgress: percent })
+                        }
+                    }
+                });
+            }
+
+            // 2. Predict
+            const blob = await this.ttsSession.predict(content)
             
-            if (currentRequestId !== this.activeRequestId) return;
-            
-            // 2. Generate
-            const blob = await session.predict(content);
-            
-            if (currentRequestId !== this.activeRequestId) return;
+            if (currentRequestId !== this.activeRequestId) return
             
             if (this.currentBlobUrl) URL.revokeObjectURL(this.currentBlobUrl)
+            
             const url = URL.createObjectURL(blob)
             this.currentBlobUrl = url
             
@@ -424,22 +394,30 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             }
             
             audio.onerror = (e) => {
-                console.error("Audio Error:", e)
+                console.error("Audio Playback Error:", e)
                 this.stopTTS()
-                window.utils.showMessageBox(intl.get("app.name"), "Failed to play audio.", intl.get("confirm"), "", false, "error")
             }
             
             await audio.play()
-            this.setState({ isReading: true, isLoadingTTS: false, ttsDownloadProgress: 0 })
+            this.setState({ 
+                isReading: true, 
+                isLoadingTTS: false,
+                ttsDownloadProgress: 0
+            })
             
         } catch (e) {
-            console.error("TTS Error:", e)
+            console.error("TTS Generation Error:", e)
             if (currentRequestId === this.activeRequestId) {
-                this.setState({ isLoadingTTS: false, isReading: false, ttsDownloadProgress: 0 })
+                this.setState({ 
+                    isLoadingTTS: false, 
+                    isReading: false,
+                    ttsDownloadProgress: 0
+                })
+                
                 const errorMsg = e instanceof Error ? e.message : "Unknown error"
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `TTS Failed: ${errorMsg}\n\nCheck console for details.`,
+                    `TTS Failed: ${errorMsg}\n\nEnsure you have an internet connection for the initial model download.`,
                     intl.get("confirm"),
                     "",
                     false,
@@ -487,11 +465,9 @@ class Article extends React.Component<ArticleProps, ArticleState> {
 
     componentWillUnmount = () => {
         this.stopTTS()
-        
         if (this.webview) {
             this.webview.removeEventListener("did-stop-loading", this.webviewLoaded)
         }
-        
         let refocus = document.querySelector(
             `#refocus div[data-iid="${this.props.item._id}"]`
         ) as HTMLElement
@@ -646,6 +622,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                         iconProps={{ iconName: "Globe" }}
                         onClick={this.toggleWebpage}
                     />
+                    {/* ==================== TTS BUTTON ==================== */}
                     <CommandBarButton
                         title={this.state.isReading ? "Stop Reading" : "Read Aloud"}
                         className={this.state.isReading ? "active" : ""}
