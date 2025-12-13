@@ -20,8 +20,6 @@ import {
 } from "../scripts/models/source"
 import { shareSubmenu } from "./context-menu"
 import { platformCtrl, decodeFetchResponse } from "../scripts/utils"
-
-// Import TtsSession directly for advanced configuration
 import { TtsSession } from "@mintplex-labs/piper-tts-web"
 
 const FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
@@ -354,16 +352,23 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             this.setState({ isLoadingTTS: true, ttsDownloadProgress: 0 })
             
-            // 1. Initialize Session with LOCAL WASM PATHS
+            // 1. Initialize Session with ABSOLUTE SYSTEM PATHS
             if (!this.ttsSession) {
+                // Get the real file system path from the bridge
+                // This resolves to /tmp/.mount_XXX/resources/app.asar.unpacked/dist/wasm
+                const wasmBasePath = window.utils.getWasmPath();
+                
+                // Construct a file:// URL for dynamic imports
+                const wasmUrl = `file://${wasmBasePath}/`;
+
+                console.log("Initializing TTS with WASM Path:", wasmUrl);
+
                 this.ttsSession = new TtsSession({
                     voiceId: 'en_US-lessac-medium',
                     wasmPaths: {
-                        // We configured webpack to copy WASM to dist/wasm/
-                        // Since article.html runs in dist/article/, we go up one level.
-                        onnxWasm: '../wasm/', 
-                        piperWasm: '../wasm/piper_phonemize.wasm',
-                        piperData: '../wasm/piper_phonemize.data',
+                        onnxWasm: wasmUrl,
+                        piperWasm: `${wasmUrl}piper_phonemize.wasm`,
+                        piperData: `${wasmUrl}piper_phonemize.data`,
                     },
                     progress: (progress) => {
                         if (currentRequestId === this.activeRequestId && progress.total > 0) {
