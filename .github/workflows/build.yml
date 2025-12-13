@@ -72,13 +72,13 @@ jobs:
           # 1. Overwrite article.tsx
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Overwrite utils.ts (New Bridge Logic)
-          cp -f my-patches/utils.ts src/bridges/utils.ts
-
+          # 2. Overwrite preload.ts (NEW)
+          cp -f my-patches/preload.ts src/preload.ts
+      
           # 3. Copy the Patch Scripts to root
           cp -f my-patches/patch-webpack.js .
           cp -f my-patches/patch-electron-builder.js .
-
+      
           # Clean up patches folder
           rm -rf my-patches
 
