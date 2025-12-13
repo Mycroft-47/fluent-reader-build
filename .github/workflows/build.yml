@@ -39,81 +39,54 @@ jobs:
           npm install
           npm install @mintplex-labs/piper-tts-web
 
-      # --- FIX 1: Smart Bundle WASM Files (Finds them automatically) ---
+      # --- FIX 1: Bundle WASM Files (Download missing binaries) ---
       - name: Bundle WASM Files
         run: |
           echo "Creating wasm-files directory..."
           mkdir -p wasm-files/onnx
           mkdir -p wasm-files/piper
           
-          echo "Locating and copying ONNX Runtime files..."
-          # Find the files anywhere in node_modules to avoid path errors
+          echo "Copying ONNX Runtime files (from node_modules)..."
           find node_modules -name "ort-wasm-simd-threaded.wasm" -exec cp {} wasm-files/onnx/ \;
           find node_modules -name "ort-wasm-simd-threaded.mjs" -exec cp {} wasm-files/onnx/ \;
           
-          echo "Locating and copying Piper Phonemize files..."
-          find node_modules -name "piper_phonemize.wasm" -exec cp {} wasm-files/piper/ \;
-          find node_modules -name "piper_phonemize.data" -exec cp {} wasm-files/piper/ \;
+          echo "Downloading Piper Phonemize files (from CDN)..."
+          # We use specific versions to ensure stability
+          BASE_URL="https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build"
+          
+          wget -q -O wasm-files/piper/piper_phonemize.wasm "$BASE_URL/piper_phonemize.wasm"
+          wget -q -O wasm-files/piper/piper_phonemize.data "$BASE_URL/piper_phonemize.data"
+          wget -q -O wasm-files/piper/piper_phonemize.js   "$BASE_URL/piper_phonemize.js"
+          wget -q -O wasm-files/piper/piper_worker.js      "$BASE_URL/worker/piper_worker.js"
           
           echo "Verifying WASM bundle..."
           ls -R wasm-files/
           
-          # Fail if empty (sanity check)
-          if [ -z "$(ls -A wasm-files/piper)" ]; then
-             echo "Error: Piper files not found!"
+          if [ ! -s wasm-files/piper/piper_phonemize.wasm ]; then
+             echo "Error: Piper WASM file download failed!"
              exit 1
           fi
 
-      # --- FIX 2: Create Path Helper (Inside utils folder) ---
-      - name: Create WASM Path Helper
+      # --- FIX 2: Inject Custom Code from Repo ---
+      - name: Inject Custom Code
         run: |
+          echo "Injecting Article Component..."
+          cp -f my-patches/article.tsx src/components/article.tsx
+          
+          echo "Injecting WASM Path Helper..."
           mkdir -p src/utils
-          cat <<'EOF' > src/utils/wasm-paths.ts
-          import { app } from 'electron';
-          import * as path from 'path';
-
-          export function getWasmPaths(): {
-            onnxWasm: string;
-            piperData: string;
-            piperWasm: string;
-          } {
-            const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-            
-            if (isDev) {
-              const basePath = path.join(__dirname, '../../');
-              // Dev paths (approximate, might need adjustment if running dev mode)
-              return {
-                onnxWasm: path.join(basePath, 'node_modules/onnxruntime-web/dist/'),
-                piperWasm: path.join(basePath, 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.wasm'),
-                piperData: path.join(basePath, 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.data'),
-              };
-            } else {
-              // Prod paths (inside AppImage)
-              const resourcesPath = process.resourcesPath;
-              const wasmBase = path.join(resourcesPath, 'wasm-files');
-              
-              return {
-                onnxWasm: path.join(wasmBase, 'onnx/'),
-                piperWasm: path.join(wasmBase, 'piper/piper_phonemize.wasm'),
-                piperData: path.join(wasmBase, 'piper/piper_phonemize.data'),
-              };
-            }
-          }
-
-          export function setupWasmPathIPC(ipcMain: any) {
-            ipcMain.handle('get-wasm-paths', () => {
-              return getWasmPaths();
-            });
-          }
-          EOF
+          cp -f my-patches/wasm-paths.ts src/utils/wasm-paths.ts
+          
+          echo "Cleaning up patches..."
+          rm -rf my-patches
 
       # --- FIX 3: Patch Electron Main Process ---
       - name: Patch Main Process
         run: |
-          # Add import to src/electron.ts
+          # Import the helper at the top
           sed -i '1s/^/import { setupWasmPathIPC } from ".\/utils\/wasm-paths";\n/' src/electron.ts
           
-          # Append setup call to end of file
+          # Initialize IPC at the end of the file
           cat <<'EOF' >> src/electron.ts
 
           import { ipcMain } from "electron";
@@ -133,25 +106,23 @@ jobs:
           });
           EOF
 
-      # --- FIX 5: Patch package.json for ASAR Unpack ---
+      # --- FIX 5: Patch package.json for ASAR Unpack & Exports ---
       - name: Patch package.json
         run: |
           node -e "
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
           
-          // Ensure build config exists
+          // 1. Add WASM files to build config
           pkg.build = pkg.build || {};
-          
-          // Add files to include
           pkg.build.files = pkg.build.files || ['dist/**/*', 'node_modules/**/*', 'package.json'];
           pkg.build.files.push('wasm-files/**/*');
           
-          // Add asarUnpack to keep WASM files accessible
+          // 2. Unpack WASM files so they are real files on disk (crucial for loading)
           pkg.build.asarUnpack = pkg.build.asarUnpack || [];
           pkg.build.asarUnpack.push('wasm-files/**/*');
           
-          // Add extraResources to copy the folder
+          // 3. Copy WASM folder to resources
           pkg.build.extraResources = pkg.build.extraResources || [];
           pkg.build.extraResources.push({
             from: 'wasm-files',
@@ -159,7 +130,7 @@ jobs:
             filter: ['**/*']
           });
           
-          // Fix exports for Webpack (Piper)
+          // 4. Fix Webpack exports for Piper library
           const piperPath = './node_modules/@mintplex-labs/piper-tts-web/package.json';
           if (fs.existsSync(piperPath)) {
              const piperPkg = JSON.parse(fs.readFileSync(piperPath, 'utf8'));
@@ -173,14 +144,8 @@ jobs:
           }
           
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          console.log('✓ Patched package.json for WASM bundling and Exports');
+          console.log('✓ Patched package.json configuration');
           "
-
-      - name: Inject Custom Article Component
-        run: |
-          echo "Overwriting article.tsx..."
-          cp -f my-patches/article.tsx src/components/article.tsx
-          rm -rf my-patches
 
       - name: Apply Customizations
         run: |
