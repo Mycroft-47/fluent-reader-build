@@ -14,6 +14,13 @@ jobs:
           repository: yang991178/fluent-reader
           ref: master
 
+      - name: Checkout My Patches
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          path: my-patches
+          ref: ${{ github.ref }}
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -27,7 +34,16 @@ jobs:
           npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install Dependencies
-        run: npm install
+        run: |
+          npm install
+          # Install Piper TTS WASM Library
+          npm install @mintplex-labs/piper-tts-web
+
+      - name: Inject Piper TTS Implementation
+        # Copy the file from your repo (my-patches folder) to the source tree
+        run: |
+          echo "Overwriting article.tsx with custom version..."
+          cp my-patches/article.tsx src/components/article.tsx
 
       - name: Apply Customizations (Fonts, Defaults)
         run: |
