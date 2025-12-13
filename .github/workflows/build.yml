@@ -26,128 +26,59 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Patch Version with Commit Hash
+      - name: Patch Version
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           NEW_VERSION="${CURRENT_VERSION}-${SHORT_SHA}"
-          echo "Building version: $NEW_VERSION (upstream commit: $SHORT_SHA)"
+          echo "Building version: $NEW_VERSION"
           npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install Dependencies
         run: |
           npm install
-          # Install the wrapper library
+          # Install Piper TTS
           npm install @mintplex-labs/piper-tts-web
-          # Install the actual WASM binaries (The "Better Way")
-          npm install @diffusionstudio/piper-wasm
+          # Install Webpack Copy Plugin (Standard solution for WASM assets)
+          npm install --save-dev copy-webpack-plugin
 
-      # --- FIX 1: Bundle WASM Files (Clean Copy, No Downloads) ---
-      - name: Bundle WASM Files
-        run: |
-          echo "Creating wasm-files directory..."
-          mkdir -p wasm-files/onnx
-          mkdir -p wasm-files/piper
-          
-          echo "Copying ONNX Runtime files..."
-          # We use find to be safe, but they are standard in node_modules
-          find node_modules -name "ort-wasm-simd-threaded.wasm" -exec cp {} wasm-files/onnx/ \;
-          find node_modules -name "ort-wasm-simd-threaded.mjs" -exec cp {} wasm-files/onnx/ \;
-          
-          echo "Copying Piper Phonemize files (from diffusionstudio package)..."
-          # Direct copy from the installed package. Much cleaner!
-          cp node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.wasm wasm-files/piper/
-          cp node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.data wasm-files/piper/
-          cp node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.js   wasm-files/piper/
-          cp node_modules/@diffusionstudio/piper-wasm/build/worker/piper_worker.js      wasm-files/piper/
-          
-          echo "Verifying WASM bundle..."
-          ls -R wasm-files/
-          
-          if [ ! -s wasm-files/piper/piper_phonemize.wasm ]; then
-             echo "Error: Piper WASM file missing!"
-             exit 1
-          fi
-
-      # --- FIX 2: Inject Custom Code from Repo ---
-      - name: Inject Custom Code
-        run: |
-          echo "Injecting Article Component..."
-          cp -f my-patches/article.tsx src/components/article.tsx
-          
-          echo "Injecting WASM Path Helper..."
-          mkdir -p src/utils
-          cp -f my-patches/wasm-paths.ts src/utils/wasm-paths.ts
-          
-          echo "Cleaning up patches..."
-          rm -rf my-patches
-
-      # --- FIX 3: Patch Electron Main Process ---
-      - name: Patch Main Process
-        run: |
-          sed -i '1s/^/import { setupWasmPathIPC } from ".\/utils\/wasm-paths";\n/' src/electron.ts
-          
-          cat <<'EOF' >> src/electron.ts
-
-          import { ipcMain } from "electron";
-          app.whenReady().then(() => {
-              setupWasmPathIPC(ipcMain);
-          });
-          EOF
-
-      # --- FIX 4: Patch Preload Script ---
-      - name: Patch Preload Script
-        run: |
-          cat <<'EOF' >> src/preload.ts
-          
-          import { ipcRenderer } from "electron";
-          contextBridge.exposeInMainWorld('wasmPaths', {
-            get: () => ipcRenderer.invoke('get-wasm-paths')
-          });
-          EOF
-
-      # --- FIX 5: Patch package.json for ASAR Unpack & Exports ---
-      - name: Patch package.json
+      # --- Fix Package Exports ---
+      - name: Fix Piper TTS Package Exports
         run: |
           node -e "
           const fs = require('fs');
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          
-          // 1. Add WASM files to build config
-          pkg.build = pkg.build || {};
-          pkg.build.files = pkg.build.files || ['dist/**/*', 'node_modules/**/*', 'package.json'];
-          pkg.build.files.push('wasm-files/**/*');
-          
-          // 2. Unpack WASM files so they are real files on disk
-          pkg.build.asarUnpack = pkg.build.asarUnpack || [];
-          pkg.build.asarUnpack.push('wasm-files/**/*');
-          
-          // 3. Copy WASM folder to resources
-          pkg.build.extraResources = pkg.build.extraResources || [];
-          pkg.build.extraResources.push({
-            from: 'wasm-files',
-            to: 'wasm-files',
-            filter: ['**/*']
-          });
-          
-          // 4. Fix Webpack exports for Piper library
-          const piperPath = './node_modules/@mintplex-labs/piper-tts-web/package.json';
-          if (fs.existsSync(piperPath)) {
-             const piperPkg = JSON.parse(fs.readFileSync(piperPath, 'utf8'));
-             piperPkg.exports['.'] = {
-               import: piperPkg.exports['.'].import,
-               require: piperPkg.exports['.'].import,
-               default: piperPkg.exports['.'].import,
-               types: piperPkg.exports['.'].types
-             };
-             fs.writeFileSync(piperPath, JSON.stringify(piperPkg, null, 2));
+          const path = './node_modules/@mintplex-labs/piper-tts-web/package.json';
+          if (fs.existsSync(path)) {
+            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+            pkg.exports['.'] = {
+              import: pkg.exports['.'].import,
+              require: pkg.exports['.'].import,
+              default: pkg.exports['.'].import,
+              types: pkg.exports['.'].types
+            };
+            fs.writeFileSync(path, JSON.stringify(pkg, null, 2));
           }
-          
-          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          console.log('✓ Patched package.json configuration');
           "
 
-      - name: Apply Customizations
+      # --- Inject Files & Patches ---
+      - name: Apply Custom Files
+        run: |
+          # 1. Overwrite article.tsx
+          cp -f my-patches/article.tsx src/components/article.tsx
+          
+          # 2. Copy the Webpack Patch Script to root
+          cp -f my-patches/patch-webpack.js .
+
+          # Clean up patches folder
+          rm -rf my-patches
+
+      # --- Standardize Webpack Config ---
+      - name: Patch Webpack Config
+        run: |
+          echo "Injecting WASM copy plugin into webpack config..."
+          node patch-webpack.js
+
+      - name: Apply Preferences (Fonts, etc)
         run: |
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' src/scripts/settings.ts
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/styles/global.css
@@ -155,25 +86,23 @@ jobs:
           sed -i 's/ViewType.Cards/ViewType.List/g' src/main/settings.ts
           sed -i 's/this.openTarget = SourceOpenTarget.Local/this.openTarget = SourceOpenTarget.FullContent/' src/scripts/models/source.ts
 
-      - name: Clear Webpack Cache
-        run: rm -rf node_modules/.cache/webpack
-        
-      - name: Build React/TypeScript Code
-        run: npm run build
+      - name: Build
+        run: |
+          rm -rf node_modules/.cache/webpack
+          npm run build
 
       - name: Package Linux AppImage
         run: npm run package-linux
 
-      - name: Get Final Version
+      - name: Get Version
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Upload AppImage Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FluentReader-${{ steps.version.outputs.version }}-Linux-x64
           path: bin/linux/x64/*.AppImage
-          if-no-files-found: error
           compression-level: 0
