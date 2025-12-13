@@ -8,14 +8,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Get the Upstream Source Code (Fluent Reader)
       - name: Checkout Upstream Source Code
         uses: actions/checkout@v4
         with:
           repository: yang991178/fluent-reader
           ref: master
 
-      # 2. Get YOUR Repo (where article.tsx lives)
       - name: Checkout My Patches
         uses: actions/checkout@v4
         with:
@@ -39,60 +37,156 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install
-          # Install Piper TTS WASM Library
           npm install @mintplex-labs/piper-tts-web
 
-      # --- FIX 1: Patch the broken package.json in the library ---
-      - name: Fix Piper TTS Package Exports
+      # --- FIX 1: Bundle WASM Files ---
+      - name: Bundle WASM Files
         run: |
-          echo "Patching piper-tts-web package.json exports..."
+          echo "Creating wasm-files directory..."
+          mkdir -p wasm-files/onnx
+          mkdir -p wasm-files/piper
+          
+          echo "Copying ONNX Runtime WASM files..."
+          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm wasm-files/onnx/
+          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs wasm-files/onnx/
+          
+          echo "Copying Piper Phonemize WASM files..."
+          cp node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.wasm wasm-files/piper/
+          cp node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.data wasm-files/piper/
+          
+          echo "Verifying WASM bundle..."
+          ls -R wasm-files/
+
+      # --- FIX 2: Create Path Helper ---
+      - name: Create WASM Path Helper
+        run: |
+          cat <<'EOF' > src/main/wasm-paths.ts
+          import { app } from 'electron';
+          import * as path from 'path';
+
+          export function getWasmPaths(): {
+            onnxWasm: string;
+            piperData: string;
+            piperWasm: string;
+          } {
+            const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+            
+            if (isDev) {
+              const basePath = path.join(__dirname, '../../');
+              return {
+                onnxWasm: path.join(basePath, 'node_modules/onnxruntime-web/dist/'),
+                piperWasm: path.join(basePath, 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.wasm'),
+                piperData: path.join(basePath, 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.data'),
+              };
+            } else {
+              const resourcesPath = process.resourcesPath;
+              const wasmBase = path.join(resourcesPath, 'wasm-files');
+              
+              return {
+                onnxWasm: path.join(wasmBase, 'onnx/'),
+                piperWasm: path.join(wasmBase, 'piper/piper_phonemize.wasm'),
+                piperData: path.join(wasmBase, 'piper/piper_phonemize.data'),
+              };
+            }
+          }
+
+          export function setupWasmPathIPC(ipcMain: any) {
+            ipcMain.handle('get-wasm-paths', () => {
+              return getWasmPaths();
+            });
+          }
+          EOF
+
+      # --- FIX 3: Patch Electron Main Process ---
+      - name: Patch Main Process
+        run: |
+          # Add import at the top
+          sed -i '1s/^/import { setupWasmPathIPC } from ".\/main\/wasm-paths";\n/' src/electron.ts
+          
+          # Add setup call after app is ready. 
+          # We append it to the end of the file, assuming ipcMain is available or imported.
+          # src/electron.ts imports ipcMain from 'electron'.
+          # We'll use a safer approach: find the app.whenReady line and append inside? 
+          # Or just append to end of file if it's top-level scope.
+          # Looking at standard Electron apps, app.whenReady is usually main scope.
+          # We will append a new block at the end.
+          cat <<'EOF' >> src/electron.ts
+
+          import { ipcMain } from "electron";
+          app.whenReady().then(() => {
+              setupWasmPathIPC(ipcMain);
+          });
+          EOF
+
+      # --- FIX 4: Patch Preload Script ---
+      - name: Patch Preload Script
+        run: |
+          # Add IPC exposure to renderer
+          cat <<'EOF' >> src/preload.ts
+          
+          import { ipcRenderer } from "electron";
+          contextBridge.exposeInMainWorld('wasmPaths', {
+            get: () => ipcRenderer.invoke('get-wasm-paths')
+          });
+          EOF
+
+      # --- FIX 5: Patch package.json for ASAR Unpack ---
+      - name: Patch package.json
+        run: |
           node -e "
           const fs = require('fs');
-          const path = './node_modules/@mintplex-labs/piper-tts-web/package.json';
-          if (fs.existsSync(path)) {
-            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-            // Force Webpack to accept the import as a require/default fallback
-            pkg.exports['.'] = {
-              import: pkg.exports['.'].import,
-              require: pkg.exports['.'].import,
-              default: pkg.exports['.'].import,
-              types: pkg.exports['.'].types
-            };
-            fs.writeFileSync(path, JSON.stringify(pkg, null, 2));
-            console.log('✓ Fixed exports field');
-          } else {
-            console.error('Package not found! Check npm install.');
-            process.exit(1);
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          
+          // Ensure build config exists
+          pkg.build = pkg.build || {};
+          
+          // Add files to include
+          pkg.build.files = pkg.build.files || ['dist/**/*', 'node_modules/**/*', 'package.json'];
+          pkg.build.files.push('wasm-files/**/*');
+          
+          // Add asarUnpack to keep WASM files accessible
+          pkg.build.asarUnpack = pkg.build.asarUnpack || [];
+          pkg.build.asarUnpack.push('wasm-files/**/*');
+          
+          // Add extraResources to copy the folder
+          pkg.build.extraResources = pkg.build.extraResources || [];
+          pkg.build.extraResources.push({
+            from: 'wasm-files',
+            to: 'wasm-files',
+            filter: ['**/*']
+          });
+          
+          // Fix exports for Webpack (from previous fix)
+          const piperPath = './node_modules/@mintplex-labs/piper-tts-web/package.json';
+          if (fs.existsSync(piperPath)) {
+             const piperPkg = JSON.parse(fs.readFileSync(piperPath, 'utf8'));
+             piperPkg.exports['.'] = {
+               import: piperPkg.exports['.'].import,
+               require: piperPkg.exports['.'].import,
+               default: piperPkg.exports['.'].import,
+               types: piperPkg.exports['.'].types
+             };
+             fs.writeFileSync(piperPath, JSON.stringify(piperPkg, null, 2));
           }
+          
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          console.log('✓ Patched package.json for WASM bundling and Exports');
           "
 
-      # --- FIX 2: Copy file AND delete the patch folder so TS doesn't compile it ---
-      - name: Inject Piper TTS Implementation
+      - name: Inject Custom Article Component
         run: |
-          echo "Overwriting article.tsx with custom version..."
-          # Force copy
+          echo "Overwriting article.tsx..."
           cp -f my-patches/article.tsx src/components/article.tsx
-          
-          # CRITICAL: Delete the source patch folder. 
-          # If we don't, TypeScript tries to compile my-patches/article.tsx
-          # and fails because the relative paths (../scripts) are wrong there.
-          echo "Removing patch directory to prevent TS errors..."
           rm -rf my-patches
 
-      - name: Apply Customizations (Fonts, Defaults)
+      - name: Apply Customizations
         run: |
-          # 1. Fonts: Prepend Noto Kufi Arabic and Rubik to font families
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' src/scripts/settings.ts
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/styles/global.css
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/article/article.css
-          
-          # 2. Default View: Change Cards to List
           sed -i 's/ViewType.Cards/ViewType.List/g' src/main/settings.ts
-          
-          # 3. Default Open Mode: Change Local to FullContent
           sed -i 's/this.openTarget = SourceOpenTarget.Local/this.openTarget = SourceOpenTarget.FullContent/' src/scripts/models/source.ts
 
-      # --- FIX 3: Clear cache to ensure clean build ---
       - name: Clear Webpack Cache
         run: rm -rf node_modules/.cache/webpack
         
@@ -102,7 +196,7 @@ jobs:
       - name: Package Linux AppImage
         run: npm run package-linux
 
-      - name: Get Final Version for Artifact
+      - name: Get Final Version
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
