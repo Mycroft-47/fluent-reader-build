@@ -39,11 +39,13 @@ jobs:
           npm install
           # 1. Install Piper TTS Wrapper
           npm install @mintplex-labs/piper-tts-web
-          # 2. Install Piper WASM Binaries (Vital: Contains the actual .wasm/.data files)
+          # 2. Install Piper WASM Binaries
           npm install @diffusionstudio/piper-wasm
-          # 3. Install Webpack Copy Plugin (To move WASM to dist/)
+          # 3. Install ONNX Runtime (NEW: Required to force global config)
+          npm install onnxruntime-web
+          # 4. Install Webpack Copy Plugin
           npm install --save-dev copy-webpack-plugin
-          # 4. Install JS-YAML (Required for the electron-builder patch script)
+          # 5. Install JS-YAML
           npm install --save-dev js-yaml
 
       # --- Fix Piper Package Exports (Standard Fix) ---
