@@ -24,18 +24,18 @@ import { TtsSession } from "@mintplex-labs/piper-tts-web"
 import { env } from "onnxruntime-web"
 
 // --- GLOBAL CONFIGURATION ---
-// With ASAR disabled, we can trust standard relative paths.
-// article.html is in /dist/article/
-// wasm files are in /dist/wasm/
-// So "../wasm/" is the correct relative path.
+// With ASAR disabled, 'article.html' lives in /dist/article/
+// and WASM files live in /dist/wasm/
+// Therefore, "../wasm/" is the correct, standard relative path.
 const WASM_REL_PATH = '../wasm/';
 
-// Force ONNX to look in the right place immediately
 try {
+    // Force ONNX to look in the relative path
     // @ts-ignore
     env.wasm.wasmPaths = WASM_REL_PATH;
+    console.log("TTS: Configured WASM path to:", WASM_REL_PATH);
 } catch (e) {
-    console.error("Failed to set global ONNX config:", e);
+    console.error("TTS: Failed to set global ONNX config:", e);
 }
 // ----------------------------
 
@@ -371,8 +371,8 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             // 1. Initialize Session
             if (!this.ttsSession) {
-                // Ensure config is set
-                 // @ts-ignore
+                // Reinforce global config just in case
+                // @ts-ignore
                 env.wasm.wasmPaths = WASM_REL_PATH;
 
                 this.ttsSession = new TtsSession({
