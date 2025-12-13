@@ -1,7 +1,8 @@
 /**
  * patch-electron-builder.js
- * Adds asarUnpack configuration to electron-builder.yml to exclude WASM files from ASAR
- * so they can be loaded dynamically at runtime.
+ * Disables ASAR compression completely.
+ * This ensures all files (including .mjs and .wasm) are physically present on disk,
+ * resolving all dynamic import errors.
  */
 
 const fs = require('fs');
@@ -19,28 +20,18 @@ try {
     const content = fs.readFileSync(configPath, 'utf8');
     const config = yaml.load(content);
 
-    // Initialize asarUnpack if it doesn't exist
-    if (!config.asarUnpack) {
-        config.asarUnpack = [];
-    } else if (typeof config.asarUnpack === 'string') {
-        // Convert string to array if necessary
-        config.asarUnpack = [config.asarUnpack];
+    // --- CRITICAL CHANGE: Disable ASAR ---
+    console.log("✓ Disabling ASAR compression...");
+    config.asar = false;
+    
+    // Remove asarUnpack since we are unpacking everything
+    if (config.asarUnpack) {
+        delete config.asarUnpack;
     }
+    // -------------------------------------
 
-    // The pattern matches the source path in your project
-    const wasmPattern = 'dist/wasm/**/*';
-
-    if (!config.asarUnpack.includes(wasmPattern)) {
-        config.asarUnpack.push(wasmPattern);
-        console.log(`✓ Added "${wasmPattern}" to asarUnpack.`);
-        
-        // Write the changes back to the file
-        // noRefs: true prevents using YAML references which might confuse some parsers
-        fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }));
-        console.log('✓ electron-builder.yml patched successfully!');
-    } else {
-        console.log('⚠ WASM unpack rule already exists.');
-    }
+    fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }));
+    console.log('✓ electron-builder.yml patched: ASAR disabled.');
 
 } catch (e) {
     console.error('Error patching electron-builder.yml:', e);
