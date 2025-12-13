@@ -8,12 +8,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Get the Upstream Source Code (Fluent Reader)
       - name: Checkout Upstream Source Code
         uses: actions/checkout@v4
         with:
           repository: yang991178/fluent-reader
           ref: master
 
+      # 2. Get YOUR Repo (where article.tsx lives)
       - name: Checkout My Patches
         uses: actions/checkout@v4
         with:
@@ -25,6 +27,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
       - name: Patch Version with Commit Hash
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
@@ -39,15 +42,48 @@ jobs:
           # Install Piper TTS WASM Library
           npm install @mintplex-labs/piper-tts-web
 
+      # --- FIX 1: Patch the broken package.json in the library ---
+      - name: Fix Piper TTS Package Exports
+        run: |
+          echo "Patching piper-tts-web package.json exports..."
+          node -e "
+          const fs = require('fs');
+          const path = './node_modules/@mintplex-labs/piper-tts-web/package.json';
+          if (fs.existsSync(path)) {
+            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+            // Force Webpack to accept the import as a require/default fallback
+            pkg.exports['.'] = {
+              import: pkg.exports['.'].import,
+              require: pkg.exports['.'].import,
+              default: pkg.exports['.'].import,
+              types: pkg.exports['.'].types
+            };
+            fs.writeFileSync(path, JSON.stringify(pkg, null, 2));
+            console.log('✓ Fixed exports field');
+          } else {
+            console.error('Package not found! Check npm install.');
+            process.exit(1);
+          }
+          "
+
+      # --- FIX 2: Copy file AND delete the patch folder so TS doesn't compile it ---
       - name: Inject Piper TTS Implementation
-        # Copy the file from your repo (my-patches folder) to the source tree
         run: |
           echo "Overwriting article.tsx with custom version..."
-          cp my-patches/article.tsx src/components/article.tsx
+          # Force copy
+          cp -f my-patches/article.tsx src/components/article.tsx
+          
+          # CRITICAL: Delete the source patch folder. 
+          # If we don't, TypeScript tries to compile my-patches/article.tsx
+          # and fails because the relative paths (../scripts) are wrong there.
+          echo "Removing patch directory to prevent TS errors..."
+          rm -rf my-patches
 
       - name: Apply Customizations (Fonts, Defaults)
         run: |
-          # 1. Prepend Noto Kufi Arabic and Rubik to font families
+          # 1. Fonts: Prepend Noto Kufi Arabic and Rubik to font families
+          sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' src/scripts/settings.ts
+          sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/styles/global.css
           sed -i 's/"Segoe UI"/"Noto Kufi Arabic", "Rubik", "Segoe UI"/g' dist/article/article.css
           
           # 2. Default View: Change Cards to List
@@ -55,6 +91,10 @@ jobs:
           
           # 3. Default Open Mode: Change Local to FullContent
           sed -i 's/this.openTarget = SourceOpenTarget.Local/this.openTarget = SourceOpenTarget.FullContent/' src/scripts/models/source.ts
+
+      # --- FIX 3: Clear cache to ensure clean build ---
+      - name: Clear Webpack Cache
+        run: rm -rf node_modules/.cache/webpack
         
       - name: Build React/TypeScript Code
         run: npm run build
