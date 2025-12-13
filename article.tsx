@@ -22,10 +22,35 @@ import { shareSubmenu } from "./context-menu"
 import { platformCtrl, decodeFetchResponse } from "../scripts/utils"
 import { TtsSession } from "@mintplex-labs/piper-tts-web"
 
-// --- NEW IMPORTS ---
-// We import 'env' to manually override where ONNX looks for WASM files
+// --- NEW IMPORTS & GLOBAL CONFIGURATION ---
 import { env } from "onnxruntime-web"
-// -------------------
+
+// Force-configure ONNX Runtime immediately when this script loads
+try {
+    // @ts-ignore - RESOURCES_PATH is injected by our new preload script
+    const resourcesPath = window.RESOURCES_PATH;
+    
+    if (resourcesPath) {
+        // 1. Determine the path separator
+        // @ts-ignore
+        const isWin = navigator.platform.indexOf('Win') > -1;
+        const sep = isWin ? "\\" : "/";
+
+        // 2. Construct the absolute file:// URL to the unpacked WASM folder
+        // This targets: /tmp/.mount_XXX/resources/app.asar.unpacked/dist/wasm/
+        const wasmPath = `file://${resourcesPath}${sep}app.asar.unpacked${sep}dist${sep}wasm${sep}`;
+
+        console.log("🔵 [Article] Forcing ONNX Global Path:", wasmPath);
+
+        // 3. Set the global environment variable for ONNX
+        env.wasm.wasmPaths = wasmPath;
+    } else {
+        console.warn("🔴 [Article] RESOURCES_PATH was not found in window object");
+    }
+} catch (e) {
+    console.error("🔴 [Article] Failed to set global ONNX config:", e);
+}
+// -------------------------------------------
 
 const FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
 
@@ -357,36 +382,25 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             this.setState({ isLoadingTTS: true, ttsDownloadProgress: 0 })
             
-            // 1. Initialize Session with ABSOLUTE SYSTEM PATHS
+            // 1. Initialize Session
+            // Note: We already set env.wasm.wasmPaths globally at the top of the file
             if (!this.ttsSession) {
-                // Get the real file system path from the bridge
-                const wasmBasePath = window.utils.getWasmPath();
-                const wasmUrl = `file://${wasmBasePath}/`;
-
-                // --- DEBUGGING LOGS ---
-                console.log("=== TTS DEBUG INFO ===");
-                console.log("Calculated WASM Base Path:", wasmBasePath);
-                console.log("Full WASM URL:", wasmUrl);
-                // ----------------------
-
-                // --- FORCE GLOBAL ENV CONFIGURATION ---
-                // The library might be ignoring the constructor config.
-                // We force the global ONNX environment to use our unpacked path.
-                try {
-                    // @ts-ignore
-                    env.wasm.wasmPaths = wasmUrl; 
-                    console.log("Set global env.wasm.wasmPaths success");
-                } catch (err) {
-                    console.error("Failed to set global env:", err);
-                }
-                // --------------------------------------
+                // We redundant pass it here just in case, using the same global variable
+                // @ts-ignore
+                const resourcesPath = window.RESOURCES_PATH;
+                // @ts-ignore
+                const isWin = navigator.platform.indexOf('Win') > -1;
+                const sep = isWin ? "\\" : "/";
+                const wasmPath = resourcesPath 
+                    ? `file://${resourcesPath}${sep}app.asar.unpacked${sep}dist${sep}wasm${sep}`
+                    : '';
 
                 this.ttsSession = new TtsSession({
                     voiceId: 'en_US-lessac-medium',
                     wasmPaths: {
-                        onnxWasm: wasmUrl,
-                        piperWasm: `${wasmUrl}piper_phonemize.wasm`,
-                        piperData: `${wasmUrl}piper_phonemize.data`,
+                        onnxWasm: wasmPath,
+                        piperWasm: `${wasmPath}piper_phonemize.wasm`,
+                        piperData: `${wasmPath}piper_phonemize.data`,
                     },
                     progress: (progress) => {
                         if (currentRequestId === this.activeRequestId && progress.total > 0) {
@@ -440,7 +454,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                 const errorMsg = e instanceof Error ? e.message : "Unknown error"
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `TTS Failed: ${errorMsg}\n\nCheck the developer console (F12) for path logs.`,
+                    `TTS Failed: ${errorMsg}\n\nCheck the developer console (F12) for logs starting with 🔵 [Article].`,
                     intl.get("confirm"),
                     "",
                     false,
