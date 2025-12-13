@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron"
-import * as path from "path" // <--- Added import
+// REMOVED: import * as path from "path" (This caused the crash)
 import {
     ImageCallbackTypes,
     TouchBarTexts,
@@ -10,13 +10,17 @@ import { IObjectWithKey } from "@fluentui/react"
 const utilsBridge = {
     platform: process.platform,
 
-    // --- NEW METHOD: Expose the unpacked WASM path ---
+    // --- FIX: Calculate path with simple strings to avoid crashing Webpack ---
     getWasmPath: (): string => {
-        // In the AppImage, files are unpacked to /tmp/.mount_XXX/resources/app.asar.unpacked/dist/wasm
-        // process.resourcesPath automatically points to /tmp/.mount_XXX/resources
-        return path.join(process.resourcesPath, "app.asar.unpacked", "dist", "wasm")
+        // process.resourcesPath is available in the preload environment.
+        // For Linux/Mac, the separator is always '/'.
+        // We avoid the 'path' module import entirely.
+        const sep = process.platform === "win32" ? "\\" : "/";
+        const basePath = process.resourcesPath || "";
+        
+        return `${basePath}${sep}app.asar.unpacked${sep}dist${sep}wasm`;
     },
-    // ------------------------------------------------
+    // -----------------------------------------------------------------------
 
     getVersion: (): string => {
         return ipcRenderer.sendSync("get-version")
