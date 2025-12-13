@@ -1,6 +1,6 @@
 /**
  * patch-webpack.js
- * * This script modifies the existing webpack.config.js to:
+ * This script modifies the existing webpack.config.js to:
  * 1. Import 'copy-webpack-plugin'
  * 2. Configure it to bundle WASM files from node_modules into the output directory
  */
@@ -25,6 +25,7 @@ if (!content.includes('require("copy-webpack-plugin")')) {
 }
 
 // 2. Define the CopyPlugin configuration
+// CORRECTION: We pull 'piper_phonemize' from '@diffusionstudio/piper-wasm'
 // We copy WASM files to 'dist/wasm' so they are separated from the main app code
 const copyPluginConfig = `
     new CopyPlugin({
@@ -34,7 +35,7 @@ const copyPluginConfig = `
           to: 'wasm/[name][ext]'
         },
         {
-          from: 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.{wasm,data}',
+          from: 'node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.{wasm,data}',
           to: 'wasm/[name][ext]'
         }
       ],
