@@ -45,8 +45,6 @@ jobs:
           npm install onnxruntime-web
           # 4. Install Webpack Copy Plugin
           npm install --save-dev copy-webpack-plugin
-          # 5. Install JS-YAML
-          npm install --save-dev js-yaml
 
       - name: Fix Piper TTS Package Exports
         run: |
@@ -67,15 +65,11 @@ jobs:
 
       - name: Apply Custom Files
         run: |
-          # 1. Overwrite article.tsx (Simplified paths)
+          # 1. Overwrite article.tsx
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Revert utils.ts to standard (if needed, or just use the one in repo)
-          # We don't need the custom path logic anymore.
-          
-          # 3. Copy Patch Scripts
+          # 2. Copy Webpack Patch Script
           cp -f my-patches/patch-webpack.js .
-          cp -f my-patches/patch-electron-builder.js .
 
           # Clean up patches folder
           rm -rf my-patches
@@ -84,11 +78,6 @@ jobs:
         run: |
           echo "Injecting WASM copy plugin into webpack config..."
           node patch-webpack.js
-
-      - name: Patch Electron Builder Config (Disable ASAR)
-        run: |
-          echo "Disabling ASAR compression..."
-          node patch-electron-builder.js
 
       - name: Apply Preferences (Fonts, etc)
         run: |
@@ -103,8 +92,10 @@ jobs:
           rm -rf node_modules/.cache/webpack
           npm run build
 
+      # --- CRITICAL FIX: Force ASAR off via CLI flags ---
       - name: Package Linux AppImage
-        run: npm run package-linux
+        run: npm run package-linux -- -c.asar=false
+      # --------------------------------------------------
 
       - name: Get Version
         id: version
