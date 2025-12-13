@@ -39,28 +39,36 @@ jobs:
           npm install
           npm install @mintplex-labs/piper-tts-web
 
-      # --- FIX 1: Bundle WASM Files ---
+      # --- FIX 1: Smart Bundle WASM Files (Finds them automatically) ---
       - name: Bundle WASM Files
         run: |
           echo "Creating wasm-files directory..."
           mkdir -p wasm-files/onnx
           mkdir -p wasm-files/piper
           
-          echo "Copying ONNX Runtime WASM files..."
-          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm wasm-files/onnx/
-          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs wasm-files/onnx/
+          echo "Locating and copying ONNX Runtime files..."
+          # Find the files anywhere in node_modules to avoid path errors
+          find node_modules -name "ort-wasm-simd-threaded.wasm" -exec cp {} wasm-files/onnx/ \;
+          find node_modules -name "ort-wasm-simd-threaded.mjs" -exec cp {} wasm-files/onnx/ \;
           
-          echo "Copying Piper Phonemize WASM files..."
-          cp node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.wasm wasm-files/piper/
-          cp node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.data wasm-files/piper/
+          echo "Locating and copying Piper Phonemize files..."
+          find node_modules -name "piper_phonemize.wasm" -exec cp {} wasm-files/piper/ \;
+          find node_modules -name "piper_phonemize.data" -exec cp {} wasm-files/piper/ \;
           
           echo "Verifying WASM bundle..."
           ls -R wasm-files/
+          
+          # Fail if empty (sanity check)
+          if [ -z "$(ls -A wasm-files/piper)" ]; then
+             echo "Error: Piper files not found!"
+             exit 1
+          fi
 
-      # --- FIX 2: Create Path Helper ---
+      # --- FIX 2: Create Path Helper (Inside utils folder) ---
       - name: Create WASM Path Helper
         run: |
-          cat <<'EOF' > src/main/wasm-paths.ts
+          mkdir -p src/utils
+          cat <<'EOF' > src/utils/wasm-paths.ts
           import { app } from 'electron';
           import * as path from 'path';
 
@@ -73,12 +81,14 @@ jobs:
             
             if (isDev) {
               const basePath = path.join(__dirname, '../../');
+              // Dev paths (approximate, might need adjustment if running dev mode)
               return {
                 onnxWasm: path.join(basePath, 'node_modules/onnxruntime-web/dist/'),
                 piperWasm: path.join(basePath, 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.wasm'),
                 piperData: path.join(basePath, 'node_modules/@mintplex-labs/piper-tts-web/dist/piper_phonemize.data'),
               };
             } else {
+              // Prod paths (inside AppImage)
               const resourcesPath = process.resourcesPath;
               const wasmBase = path.join(resourcesPath, 'wasm-files');
               
@@ -100,16 +110,10 @@ jobs:
       # --- FIX 3: Patch Electron Main Process ---
       - name: Patch Main Process
         run: |
-          # Add import at the top
-          sed -i '1s/^/import { setupWasmPathIPC } from ".\/main\/wasm-paths";\n/' src/electron.ts
+          # Add import to src/electron.ts
+          sed -i '1s/^/import { setupWasmPathIPC } from ".\/utils\/wasm-paths";\n/' src/electron.ts
           
-          # Add setup call after app is ready. 
-          # We append it to the end of the file, assuming ipcMain is available or imported.
-          # src/electron.ts imports ipcMain from 'electron'.
-          # We'll use a safer approach: find the app.whenReady line and append inside? 
-          # Or just append to end of file if it's top-level scope.
-          # Looking at standard Electron apps, app.whenReady is usually main scope.
-          # We will append a new block at the end.
+          # Append setup call to end of file
           cat <<'EOF' >> src/electron.ts
 
           import { ipcMain } from "electron";
@@ -121,7 +125,6 @@ jobs:
       # --- FIX 4: Patch Preload Script ---
       - name: Patch Preload Script
         run: |
-          # Add IPC exposure to renderer
           cat <<'EOF' >> src/preload.ts
           
           import { ipcRenderer } from "electron";
@@ -156,7 +159,7 @@ jobs:
             filter: ['**/*']
           });
           
-          // Fix exports for Webpack (from previous fix)
+          // Fix exports for Webpack (Piper)
           const piperPath = './node_modules/@mintplex-labs/piper-tts-web/package.json';
           if (fs.existsSync(piperPath)) {
              const piperPkg = JSON.parse(fs.readFileSync(piperPath, 'utf8'));
