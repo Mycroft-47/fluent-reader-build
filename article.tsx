@@ -22,6 +22,11 @@ import { shareSubmenu } from "./context-menu"
 import { platformCtrl, decodeFetchResponse } from "../scripts/utils"
 import { TtsSession } from "@mintplex-labs/piper-tts-web"
 
+// --- NEW IMPORTS ---
+// We import 'env' to manually override where ONNX looks for WASM files
+import { env } from "onnxruntime-web"
+// -------------------
+
 const FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
 
 type ArticleProps = {
@@ -355,13 +360,26 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             // 1. Initialize Session with ABSOLUTE SYSTEM PATHS
             if (!this.ttsSession) {
                 // Get the real file system path from the bridge
-                // This resolves to /tmp/.mount_XXX/resources/app.asar.unpacked/dist/wasm
                 const wasmBasePath = window.utils.getWasmPath();
-                
-                // Construct a file:// URL for dynamic imports
                 const wasmUrl = `file://${wasmBasePath}/`;
 
-                console.log("Initializing TTS with WASM Path:", wasmUrl);
+                // --- DEBUGGING LOGS ---
+                console.log("=== TTS DEBUG INFO ===");
+                console.log("Calculated WASM Base Path:", wasmBasePath);
+                console.log("Full WASM URL:", wasmUrl);
+                // ----------------------
+
+                // --- FORCE GLOBAL ENV CONFIGURATION ---
+                // The library might be ignoring the constructor config.
+                // We force the global ONNX environment to use our unpacked path.
+                try {
+                    // @ts-ignore
+                    env.wasm.wasmPaths = wasmUrl; 
+                    console.log("Set global env.wasm.wasmPaths success");
+                } catch (err) {
+                    console.error("Failed to set global env:", err);
+                }
+                // --------------------------------------
 
                 this.ttsSession = new TtsSession({
                     voiceId: 'en_US-lessac-medium',
@@ -422,7 +440,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                 const errorMsg = e instanceof Error ? e.message : "Unknown error"
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `TTS Failed: ${errorMsg}\n\nEnsure you have an internet connection for the initial model download.`,
+                    `TTS Failed: ${errorMsg}\n\nCheck the developer console (F12) for path logs.`,
                     intl.get("confirm"),
                     "",
                     false,
