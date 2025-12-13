@@ -20,7 +20,19 @@ import {
 } from "../scripts/models/source"
 import { shareSubmenu } from "./context-menu"
 import { platformCtrl, decodeFetchResponse } from "../scripts/utils"
-import * as tts from "@mintplex-labs/piper-tts-web"
+
+// --- Global Type Definition for WASM Paths ---
+declare global {
+    interface Window {
+        wasmPaths: {
+            get: () => Promise<{
+                onnxWasm: string;
+                piperData: string;
+                piperWasm: string;
+            }>;
+        };
+    }
+}
 
 const FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
 
@@ -54,8 +66,12 @@ type ArticleState = {
     errorDescription: string
     isReading: boolean
     isLoadingTTS: boolean
-    ttsDownloadProgress: number // NEW: Track model download progress
+    ttsDownloadProgress: number
+    ttsSession: any | null
 }
+
+// Global Singleton to keep the engine alive across articles
+let globalTtsSession: any = null;
 
 class Article extends React.Component<ArticleProps, ArticleState> {
     webviewRef = React.createRef<Electron.WebviewTag>()
@@ -80,6 +96,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             isReading: false,
             isLoadingTTS: false,
             ttsDownloadProgress: 0,
+            ttsSession: null
         }
         window.utils.addWebviewContextListener(this.contextMenuHandler)
         window.utils.addWebviewKeydownListener(this.keyDownHandler)
@@ -286,23 +303,19 @@ class Article extends React.Component<ArticleProps, ArticleState> {
     // ==================== TTS IMPLEMENTATION ====================
 
     stopTTS = () => {
-        // Increment ID to invalidate any pending async TTS generation
         this.activeRequestId++
         
-        // Stop Audio
         if (this.audioPlayer) {
             this.audioPlayer.pause()
-            this.audioPlayer.src = '' // Clear source
+            this.audioPlayer.src = ''
             this.audioPlayer = null
         }
         
-        // Clean Memory (Blob URLs)
         if (this.currentBlobUrl) {
             URL.revokeObjectURL(this.currentBlobUrl)
             this.currentBlobUrl = null
         }
         
-        // Update UI
         if (this.state.isReading || this.state.isLoadingTTS) {
             this.setState({ 
                 isReading: false, 
@@ -312,8 +325,39 @@ class Article extends React.Component<ArticleProps, ArticleState> {
         }
     }
 
+    // Initialize session with Local Paths to avoid CDN blocking
+    initTTSSession = async () => {
+        if (globalTtsSession) return globalTtsSession;
+        
+        try {
+            // Dynamic import
+            const tts = await import("@mintplex-labs/piper-tts-web");
+            
+            // Get local paths from Main Process (via preload)
+            // This is the key fix for the "Failed to fetch" error
+            const wasmPaths = await window.wasmPaths.get();
+            
+            console.log('[TTS] Initializing with local paths:', wasmPaths);
+            
+            const session = await tts.TtsSession.create({
+                voiceId: 'en_US-lessac-medium',
+                wasmPaths: {
+                    onnxWasm: wasmPaths.onnxWasm,
+                    piperData: `file://${wasmPaths.piperData}`, // Must use file:// protocol
+                    piperWasm: `file://${wasmPaths.piperWasm}`,
+                },
+                logger: (msg: string) => console.log('[TTS]', msg)
+            });
+            
+            globalTtsSession = session;
+            return session;
+        } catch (e) {
+            console.error("[TTS] Init Error:", e);
+            throw e;
+        }
+    }
+
     handleReadAloud = async () => {
-        // Toggle Off
         if (this.state.isReading || this.state.isLoadingTTS) {
             this.stopTTS()
             return
@@ -321,20 +365,15 @@ class Article extends React.Component<ArticleProps, ArticleState> {
         
         if (!this.webview) return
         
-        // Setup Race Condition Guard
         const currentRequestId = ++this.activeRequestId
         
         try {
-            // Extract text from webview
-            // For article view: target <article> tag specifically
-            // For webpage view: use body.innerText
             const content = await this.webview.executeJavaScript(
                 this.state.loadWebpage 
                     ? "document.body.innerText || ''" 
                     : "document.querySelector('article')?.innerText || document.body.innerText || ''"
             )
             
-            // Validation
             if (!content || content.trim().length === 0) {
                 window.utils.showMessageBox(
                     intl.get("app.name"),
@@ -347,11 +386,10 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                 return
             }
             
-            // Character limit (more reasonable for UX)
             if (content.length > 10000) {
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `Article is too long for TTS (${content.length.toLocaleString()} characters, max 10,000).`,
+                    `Article is too long (${content.length} chars, max 10,000).`,
                     intl.get("confirm"),
                     "",
                     false,
@@ -362,29 +400,17 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             this.setState({ isLoadingTTS: true, ttsDownloadProgress: 0 })
             
-            // Generate Speech with progress callback
-            const blob = await tts.predict({
-                text: content,
-                voiceId: 'en_US-lessac-medium',
-            }, (progress) => {
-                // Update download progress for first-time model download
-                if (currentRequestId === this.activeRequestId && progress.total > 0) {
-                    const percent = (progress.loaded / progress.total) * 100
-                    this.setState({ ttsDownloadProgress: percent })
-                }
-            })
+            // 1. Initialize (Downloads model on first run, uses local WASM)
+            const session = await this.initTTSSession();
             
-            // Critical Race Check
-            if (currentRequestId !== this.activeRequestId) {
-                return // User cancelled or switched articles
-            }
+            if (currentRequestId !== this.activeRequestId) return;
             
-            // Cleanup old blob
-            if (this.currentBlobUrl) {
-                URL.revokeObjectURL(this.currentBlobUrl)
-            }
+            // 2. Generate
+            const blob = await session.predict(content);
             
-            // Create and play audio
+            if (currentRequestId !== this.activeRequestId) return;
+            
+            if (this.currentBlobUrl) URL.revokeObjectURL(this.currentBlobUrl)
             const url = URL.createObjectURL(blob)
             this.currentBlobUrl = url
             
@@ -398,39 +424,22 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             }
             
             audio.onerror = (e) => {
-                console.error("Audio Playback Error:", e)
+                console.error("Audio Error:", e)
                 this.stopTTS()
-                window.utils.showMessageBox(
-                    intl.get("app.name"),
-                    "Failed to play audio. The audio format may not be supported.",
-                    intl.get("confirm"),
-                    "",
-                    false,
-                    "error"
-                )
+                window.utils.showMessageBox(intl.get("app.name"), "Failed to play audio.", intl.get("confirm"), "", false, "error")
             }
             
             await audio.play()
-            this.setState({ 
-                isReading: true, 
-                isLoadingTTS: false,
-                ttsDownloadProgress: 0
-            })
+            this.setState({ isReading: true, isLoadingTTS: false, ttsDownloadProgress: 0 })
             
         } catch (e) {
-            console.error("TTS Generation Error:", e)
+            console.error("TTS Error:", e)
             if (currentRequestId === this.activeRequestId) {
-                this.setState({ 
-                    isLoadingTTS: false, 
-                    isReading: false,
-                    ttsDownloadProgress: 0
-                })
-                
-                // User feedback is critical
+                this.setState({ isLoadingTTS: false, isReading: false, ttsDownloadProgress: 0 })
                 const errorMsg = e instanceof Error ? e.message : "Unknown error"
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `Text-to-Speech failed: ${errorMsg}\n\nOn first use, models need to download (~150MB). Please check your internet connection.`,
+                    `TTS Failed: ${errorMsg}\n\nCheck console for details.`,
                     intl.get("confirm"),
                     "",
                     false,
@@ -450,7 +459,6 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             this.setState({ loaded: false, error: false })
             webview.addEventListener("did-stop-loading", this.webviewLoaded)
             
-            // Fixed: querySelector syntax (was querySelecto with backticks)
             let card = document.querySelector(
                 `#refocus div[data-iid="${this.props.item._id}"]`
             ) as HTMLElement
@@ -462,9 +470,8 @@ class Article extends React.Component<ArticleProps, ArticleState> {
     }
 
     componentDidUpdate = (prevProps: ArticleProps) => {
-        // CRITICAL: Stop audio if user switches articles
         if (prevProps.item._id !== this.props.item._id) {
-            this.stopTTS() // Prevents ghost audio
+            this.stopTTS()
             
             this.setState({
                 loadWebpage: this.props.source.openTarget === SourceOpenTarget.Webpage,
@@ -479,14 +486,12 @@ class Article extends React.Component<ArticleProps, ArticleState> {
     }
 
     componentWillUnmount = () => {
-        this.stopTTS() // Cleanup audio resources
+        this.stopTTS()
         
-        // CRITICAL: Remove webview event listeners (prevents memory leak)
         if (this.webview) {
             this.webview.removeEventListener("did-stop-loading", this.webviewLoaded)
         }
         
-        // Fixed: querySelector syntax
         let refocus = document.querySelector(
             `#refocus div[data-iid="${this.props.item._id}"]`
         ) as HTMLElement
@@ -641,7 +646,6 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                         iconProps={{ iconName: "Globe" }}
                         onClick={this.toggleWebpage}
                     />
-                    {/* ==================== TTS BUTTON ==================== */}
                     <CommandBarButton
                         title={this.state.isReading ? "Stop Reading" : "Read Aloud"}
                         className={this.state.isReading ? "active" : ""}
@@ -652,7 +656,6 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                         onClick={this.handleReadAloud}
                         disabled={this.state.isLoadingTTS}
                     />
-                    {/* =================================================== */}
                     <CommandBarButton
                         title={intl.get("more")}
                         iconProps={{ iconName: "More" }}
@@ -669,7 +672,6 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                 </Stack>
             </Stack>
             
-            {/* Download Progress Indicator */}
             {this.state.isLoadingTTS && this.state.ttsDownloadProgress > 0 && (
                 <ProgressIndicator 
                     label="Downloading TTS model (first time only)..."
