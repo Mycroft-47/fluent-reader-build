@@ -24,12 +24,13 @@ import { TtsSession } from "@mintplex-labs/piper-tts-web"
 import { env } from "onnxruntime-web"
 
 // --- GLOBAL CONFIGURATION ---
-// With ASAR disabled, relative paths work perfectly.
+// With ASAR disabled, relative paths work reliably.
 const WASM_REL_PATH = '../wasm/';
 
 try {
     // @ts-ignore
     env.wasm.wasmPaths = WASM_REL_PATH;
+    console.log("TTS: Configured WASM path to:", WASM_REL_PATH);
 } catch (e) {
     console.error("TTS: Failed to set global ONNX config:", e);
 }
@@ -367,7 +368,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             // 1. Initialize Session
             if (!this.ttsSession) {
-                // Ensure config is set globally
+                // Reinforce global config just in case
                 // @ts-ignore
                 env.wasm.wasmPaths = WASM_REL_PATH;
 
