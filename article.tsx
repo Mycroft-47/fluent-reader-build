@@ -21,36 +21,23 @@ import {
 import { shareSubmenu } from "./context-menu"
 import { platformCtrl, decodeFetchResponse } from "../scripts/utils"
 import { TtsSession } from "@mintplex-labs/piper-tts-web"
-
-// --- NEW IMPORTS & GLOBAL CONFIGURATION ---
 import { env } from "onnxruntime-web"
 
-// Force-configure ONNX Runtime immediately when this script loads
+// --- GLOBAL CONFIGURATION ---
+// With ASAR disabled, we can trust standard relative paths.
+// article.html is in /dist/article/
+// wasm files are in /dist/wasm/
+// So "../wasm/" is the correct relative path.
+const WASM_REL_PATH = '../wasm/';
+
+// Force ONNX to look in the right place immediately
 try {
-    // @ts-ignore - RESOURCES_PATH is injected by our new preload script
-    const resourcesPath = window.RESOURCES_PATH;
-    
-    if (resourcesPath) {
-        // 1. Determine the path separator
-        // @ts-ignore
-        const isWin = navigator.platform.indexOf('Win') > -1;
-        const sep = isWin ? "\\" : "/";
-
-        // 2. Construct the absolute file:// URL to the unpacked WASM folder
-        // This targets: /tmp/.mount_XXX/resources/app.asar.unpacked/dist/wasm/
-        const wasmPath = `file://${resourcesPath}${sep}app.asar.unpacked${sep}dist${sep}wasm${sep}`;
-
-        console.log("🔵 [Article] Forcing ONNX Global Path:", wasmPath);
-
-        // 3. Set the global environment variable for ONNX
-        env.wasm.wasmPaths = wasmPath;
-    } else {
-        console.warn("🔴 [Article] RESOURCES_PATH was not found in window object");
-    }
+    // @ts-ignore
+    env.wasm.wasmPaths = WASM_REL_PATH;
 } catch (e) {
-    console.error("🔴 [Article] Failed to set global ONNX config:", e);
+    console.error("Failed to set global ONNX config:", e);
 }
-// -------------------------------------------
+// ----------------------------
 
 const FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20]
 
@@ -383,24 +370,17 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             this.setState({ isLoadingTTS: true, ttsDownloadProgress: 0 })
             
             // 1. Initialize Session
-            // Note: We already set env.wasm.wasmPaths globally at the top of the file
             if (!this.ttsSession) {
-                // We redundant pass it here just in case, using the same global variable
-                // @ts-ignore
-                const resourcesPath = window.RESOURCES_PATH;
-                // @ts-ignore
-                const isWin = navigator.platform.indexOf('Win') > -1;
-                const sep = isWin ? "\\" : "/";
-                const wasmPath = resourcesPath 
-                    ? `file://${resourcesPath}${sep}app.asar.unpacked${sep}dist${sep}wasm${sep}`
-                    : '';
+                // Ensure config is set
+                 // @ts-ignore
+                env.wasm.wasmPaths = WASM_REL_PATH;
 
                 this.ttsSession = new TtsSession({
                     voiceId: 'en_US-lessac-medium',
                     wasmPaths: {
-                        onnxWasm: wasmPath,
-                        piperWasm: `${wasmPath}piper_phonemize.wasm`,
-                        piperData: `${wasmPath}piper_phonemize.data`,
+                        onnxWasm: WASM_REL_PATH,
+                        piperWasm: `${WASM_REL_PATH}piper_phonemize.wasm`,
+                        piperData: `${WASM_REL_PATH}piper_phonemize.data`,
                     },
                     progress: (progress) => {
                         if (currentRequestId === this.activeRequestId && progress.total > 0) {
@@ -454,7 +434,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
                 const errorMsg = e instanceof Error ? e.message : "Unknown error"
                 window.utils.showMessageBox(
                     intl.get("app.name"),
-                    `TTS Failed: ${errorMsg}\n\nCheck the developer console (F12) for logs starting with 🔵 [Article].`,
+                    `TTS Failed: ${errorMsg}`,
                     intl.get("confirm"),
                     "",
                     false,
