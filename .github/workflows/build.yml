@@ -70,7 +70,10 @@ jobs:
           # 1. Overwrite article.tsx
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Copy the Patch Scripts to root
+          # 2. Overwrite utils.ts (New Bridge Logic)
+          cp -f my-patches/utils.ts src/bridges/utils.ts
+
+          # 3. Copy the Patch Scripts to root
           cp -f my-patches/patch-webpack.js .
           cp -f my-patches/patch-electron-builder.js .
 
@@ -83,7 +86,7 @@ jobs:
           echo "Injecting WASM copy plugin into webpack config..."
           node patch-webpack.js
 
-      # --- Fix ASAR/WASM Loading (NEW STEP) ---
+      # --- Fix ASAR/WASM Loading ---
       - name: Patch Electron Builder Config
         run: |
           echo "Configuring ASAR unpack for WASM files..."
