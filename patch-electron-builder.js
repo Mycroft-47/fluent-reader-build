@@ -1,8 +1,8 @@
 /**
  * patch-electron-builder.js
  * Disables ASAR compression completely.
- * This ensures all files (including .mjs and .wasm) are physically present on disk,
- * resolving all dynamic import errors.
+ * This ensures all files (including .mjs and .wasm) are physically present on disk
+ * as standard files, resolving the dynamic import errors.
  */
 
 const fs = require('fs');
