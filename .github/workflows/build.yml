@@ -70,7 +70,10 @@ jobs:
           # 1. Overwrite article.tsx (Simplified paths)
           cp -f my-patches/article.tsx src/components/article.tsx
           
-          # 2. Copy Patch Scripts
+          # 2. Revert utils.ts to standard (if needed, or just use the one in repo)
+          # We don't need the custom path logic anymore.
+          
+          # 3. Copy Patch Scripts
           cp -f my-patches/patch-webpack.js .
           cp -f my-patches/patch-electron-builder.js .
 
