@@ -1,7 +1,9 @@
 /**
  * patch-electron-builder.js
- * Explicitly disables ASAR compression in electron-builder.yml.
- * This is required because CLI flags are not being respected.
+ * Configures selective unpacking.
+ * 1. Unpacks WASM files (the target).
+ * 2. Unpacks JS files (the caller).
+ * This allows dynamic import() to work because both files exist outside the ASAR archive.
  */
 
 const fs = require('fs');
@@ -19,19 +21,31 @@ try {
     const content = fs.readFileSync(configPath, 'utf8');
     const config = yaml.load(content);
 
-    // --- CRITICAL: Disable ASAR ---
-    console.log(`Current ASAR setting: ${config.asar}`);
-    config.asar = false;
-    
-    // Remove asarUnpack if present, as it conflicts with asar=false
-    if (config.asarUnpack) {
-        delete config.asarUnpack;
+    // Ensure asarUnpack is an array
+    if (!config.asarUnpack) {
+        config.asarUnpack = [];
+    } else if (typeof config.asarUnpack === 'string') {
+        config.asarUnpack = [config.asarUnpack];
     }
-    // ------------------------------
 
-    // Write back correctly
+    // 1. Unpack WASM/MJS files (The resources we need to load)
+    const wasmPattern = 'dist/wasm/**/*';
+    if (!config.asarUnpack.includes(wasmPattern)) {
+        config.asarUnpack.push(wasmPattern);
+    }
+
+    // 2. Unpack Renderer Bundles (The code that performs the import)
+    // We use a broad pattern to ensure we catch 'article.js', 'index.js', etc.
+    const rendererPattern = 'dist/**/*.js';
+    if (!config.asarUnpack.includes(rendererPattern)) {
+        config.asarUnpack.push(rendererPattern);
+    }
+
+    // Ensure ASAR compression is ON (so we only unpack what's needed)
+    config.asar = true;
+
     fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }));
-    console.log('✓ SUCCESS: electron-builder.yml patched. ASAR is now DISABLED.');
+    console.log(`✓ Configured asarUnpack: ${JSON.stringify(config.asarUnpack)}`);
 
 } catch (e) {
     console.error('Error patching electron-builder.yml:', e);
