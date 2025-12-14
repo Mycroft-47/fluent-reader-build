@@ -77,12 +77,12 @@ jobs:
           echo "Injecting WASM copy plugin into webpack config..."
           node patch-webpack.js
 
-      # --- CRITICAL STEP: Run the ASAR disabling script ---
-      - name: Patch Electron Builder Config (Disable ASAR)
+      # --- CRITICAL FIX: Run ASAR unpack configuration ---
+      - name: Patch Electron Builder Config (Unpack Renderer)
         run: |
-          echo "Disabling ASAR compression..."
+          echo "Configuring selective ASAR unpacking..."
           node patch-electron-builder.js
-      # ----------------------------------------------------
+      # ---------------------------------------------------
 
       - name: Apply Preferences
         run: |
