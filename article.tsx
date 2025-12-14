@@ -24,8 +24,9 @@ import { TtsSession } from "@mintplex-labs/piper-tts-web"
 import { env } from "onnxruntime-web"
 
 // --- GLOBAL CONFIGURATION ---
-// With ASAR disabled, relative paths work reliably.
-const WASM_REL_PATH = '../wasm/';
+// The main renderer bundle and the wasm folder are siblings in the unpacked /dist/ folder.
+// Correct path is "./wasm/"
+const WASM_REL_PATH = './wasm/';
 
 try {
     // @ts-ignore
@@ -368,7 +369,7 @@ class Article extends React.Component<ArticleProps, ArticleState> {
             
             // 1. Initialize Session
             if (!this.ttsSession) {
-                // Reinforce global config just in case
+                // Ensure config is set
                 // @ts-ignore
                 env.wasm.wasmPaths = WASM_REL_PATH;
 
